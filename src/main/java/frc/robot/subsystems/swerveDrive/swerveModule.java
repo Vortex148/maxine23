@@ -108,7 +108,7 @@ public class swerveModule extends SubsystemBase {
   }
 
   public void setState(SwerveModuleState state){
-    if (Math.abs(state.speedMetersPerSecond) > 0.001){
+    if (Math.abs(state.speedMetersPerSecond) < 0.001){
       // should prevent modules from returning to zero when stick is released
       setDriveSpeedMperS(0);
       steerMotor.set(0);
