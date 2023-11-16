@@ -7,122 +7,162 @@ package frc.robot.subsystems.swerveDrive;
 import static frc.robot.constants.driveConstants.swerveConstants.*;
 
 import com.ctre.phoenix.motorcontrol.ControlMode;
+import com.ctre.phoenix.motorcontrol.DemandType;
+import com.ctre.phoenix.motorcontrol.NeutralMode;
 import com.ctre.phoenix.motorcontrol.can.TalonFX;
 import com.ctre.phoenix.sensors.CANCoder;
+import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
+import com.fasterxml.jackson.core.StreamReadCapability;
+import com.kauailabs.navx.frc.AHRS;
 import com.revrobotics.CANSparkMax;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 import com.revrobotics.RelativeEncoder;
+import com.revrobotics.SparkMaxPIDController;
 import com.revrobotics.SparkMaxRelativeEncoder;
+import com.revrobotics.CANSparkMax.ControlType;
+import com.revrobotics.CANSparkMax.IdleMode;
+
 import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
-import edu.wpi.first.wpilibj2.command.PIDCommand;
+import edu.wpi.first.networktables.GenericEntry;
+import edu.wpi.first.networktables.NetworkTableEntry;
+import edu.wpi.first.wpilibj.shuffleboard.Shuffleboard;
+import edu.wpi.first.wpilibj.shuffleboard.ShuffleboardTab;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
-import org.opencv.core.Mat;
+
+
 
 import java.lang.Math;
 
-public class swerveModule extends SubsystemBase {
+import javax.naming.ldap.LdapName;
 
+
+
+
+public class SwerveModule extends SubsystemBase {
   private final TalonFX driveMotor;
-  private final CANSparkMax steerMotor;
+  private final CANSparkMax angleMotor;
   private final CANCoder absoluteEncoder;
 
   private final RelativeEncoder steerEncoder;
 
-  private final PIDController steeringPID;
+  private final SparkMaxPIDController angleController;
 
-  public swerveModule(int driveID, int steerID, int absoluteID) {
+  private final double rotationOffset;
+  private final double rotationOffsetRad;
+
+  private final AHRS gyro;
+
+  private final int id;
+  private SwerveModuleState lastState;
+  
+
+  public SwerveModule(int driveID, int steerID, int absoluteID, double rotationOffset, AHRS gyro, int id) {
     driveMotor = new TalonFX(driveID);
-    steerMotor = new CANSparkMax(steerID, MotorType.kBrushless);
+    angleMotor = new CANSparkMax(steerID, MotorType.kBrushless);
     absoluteEncoder = new CANCoder(absoluteID);
-    steerEncoder = steerMotor.getEncoder();
+    steerEncoder = angleMotor.getEncoder();
+    angleController = angleMotor.getPIDController();
 
-    steeringPID = new PIDController(0.0, 0, 0);
-    steeringPID.enableContinuousInput(-Math.PI, Math.PI);
+    this.rotationOffset = rotationOffset;
+    this.rotationOffsetRad = (rotationOffset / 360) * (Math.PI * 2);
+
+    this.gyro = gyro;
+    this.id = id;
+    
+    driveMotor.setNeutralMode(NeutralMode.Brake);
+    configAngleMotor();
 
     // converts position and velocity to radians and radians per sec respectivily
-    steerEncoder.setPositionConversionFactor(steerGearRatio * 2 * Math.PI);
-    steerEncoder.setVelocityConversionFactor((steerGearRatio * 2 * Math.PI) / 60);
   }
 
-  public double getAbsoluteEncoder(){
-    return absoluteEncoder.getAbsolutePosition();
-  }
-  // Should work I think from what I can find online about velocity mode
-  public void setDriveSpeedMperS(double speed){
-    driveMotor.set(ControlMode.Velocity, speed  * (10.0 / 2048.0) * wheelDiameter);
-  }
+  public double getAbsoluteEncoder() {
+            
+      return (absoluteEncoder.getAbsolutePosition());
 
+  }
+  public double getAbsoluteEncoderRad() {
+      return (absoluteEncoder.getAbsolutePosition() / 360) * (Math.PI * 2);
 
-  // created convertToRadians function in case future use is needed
-  private double convertToRadians(double value, double valueMax){
-    return (value / valueMax) * (2 * Math.PI);
   }
 
-  private double convertToRadians(double value, double valueMax, double gearRatio){
-    return ((value / valueMax) / gearRatio) * (2 * Math.PI);
-  }
 
-  private double convertToDegrees(double value, double valueMax){
-    return (value / valueMax) * value;
-  }
+  public void updateSteerEncoder(){
+    var value = (rotationOffset - getAbsoluteEncoder()) % 360;
 
-  private double convertToDegrees(double value, double valueMax, double gearRatio){
-    return ((value / valueMax) / gearRatio) * value;
-  }
-
-  public double getDriveMotorReadingRad(){
-    return convertToRadians(driveMotor.getSelectedSensorPosition(), 2048.0, driveGearRatio);
-    // 2048 is the total resolution of the falcon 500s encoder
-  }
-
-  public double getDriveMotorReadingDeg(){
-    return convertToDegrees(driveMotor.getSelectedSensorPosition(), 2048.0, driveGearRatio);
-    // 2048 is the total resolution of the falcon 500s encoder
-  }
-
-  /**  This function is used to convert the inbuilt function which provides the sensor units over 100ms to metres to 1s
-   * @return the drive velocity in m/s
-  */
-  public double getDriveMotorMPerS(){
-    return driveMotor.getSelectedSensorVelocity() * (10.0 / 2048.0) * wheelDiameter;
-  }
-
-  public double getSteerMotorReading() {
-    return steerEncoder.getPosition();
-  }
-
-  public double getAbsoluteEncoderReadingRad(){
-    return convertToRadians(absoluteEncoder.getAbsolutePosition(), 4096);
-    // 4096 is CANCoder resolution
-  }
-
-  public void resetEncoders(){
-    driveMotor.setSelectedSensorPosition(0);
-    steerEncoder.setPosition(getAbsoluteEncoder());
-  }
-
-  public SwerveModuleState getState(){
-    return new SwerveModuleState(getDriveMotorMPerS(), new Rotation2d(getSteerMotorReading()));
-  }
-
-  public void setState(SwerveModuleState state){
-    if (Math.abs(state.speedMetersPerSecond) > 0.001){
-      // should prevent modules from returning to zero when stick is released
-      setDriveSpeedMperS(0);
-      steerMotor.set(0);
+    if (value > 180){
+      value = value - 360;
     }
 
-    state = SwerveModuleState.optimize(state, getState().angle);
-    setDriveSpeedMperS(state.speedMetersPerSecond);
-    steerMotor.set(steeringPID.calculate(getSteerMotorReading(), state.angle.getRadians()));
+    System.out.print(String.valueOf(id) + ": " + String.valueOf(value));
+     
+     SmartDashboard.putNumber("Positon of Actual Val " + String.valueOf(id)+": ", value);
+     steerEncoder.setPosition(value);
   }
 
 
-  @Override
-  public void periodic() {
+  private void configAngleMotor() {
+    angleMotor.restoreFactoryDefaults();
+    angleMotor.setInverted(false);
+    angleMotor.setIdleMode(IdleMode.kCoast);
+    steerEncoder.setPositionConversionFactor(360/
+    steerGearRatio);
+    
+    angleController.setPositionPIDWrappingMinInput(-180);
+    angleController.setPositionPIDWrappingMaxInput(180);
+    angleController.setPositionPIDWrappingEnabled(true);
+
+    angleController.setP(0.01);
+    angleController.setI(0);
+    angleController.setD(0);
+    angleController.setFF(0);
+
+
+    updateSteerEncoder();
+  }
+
+  
+
+ 
+
+  public void setAngle(double value){
+      SmartDashboard.putNumber("Angle Final" + String.valueOf(id), value);
+   
+      angleMotor.getPIDController().setReference(value, ControlType.kPosition);
+   
+  }
+
+  public void setDrive(double value){
+    SmartDashboard.putNumber(String.valueOf(id), value);
+    driveMotor.set(ControlMode.PercentOutput, value * 0.2);
+  }
+  public SwerveModuleState getState(){
+    return new SwerveModuleState(0 , new Rotation2d((getAbsoluteEncoderRad() - rotationOffsetRad) % (Math.PI * 2)));
     
   }
 
+  public void setState(SwerveModuleState state){
+    state = SwerveModuleState.optimize(state, Rotation2d.fromDegrees(steerEncoder.getPosition()));
+      if (Math.abs(state.speedMetersPerSecond) < 0.1){
+        angleMotor.set(0);
+        setDrive(0);
+      }
+      
+      else{
+        setAngle(state.angle.getDegrees());
+        setDrive(state.speedMetersPerSecond);
+      }
+    }
+  
+    
+
+  @Override
+  public void periodic() {
+   
+
+   
+    // System.out.println(String.valueOf(id) + " - Absolute Encoder:   Deg:  " + String.valueOf(getAbsoluteEncoder()) + " --- Rad:  " + String.valueOf(getAbsoluteEncoderRad()));
+  }
 }
